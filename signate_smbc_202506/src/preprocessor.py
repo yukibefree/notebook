@@ -4,10 +4,10 @@
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
-
+import japanize_matplotlib
 
 class DataPreprocessor:
     """データ前処理を行うクラス"""
@@ -36,6 +36,9 @@ class DataPreprocessor:
         # 特徴量のグループ化
         self.feature_groups = self._get_feature_groups(df)
 
+        # インデックスの処理
+        df = self._convert_to_datetime(df, utc=True, tz='Europe/Berlin')
+        
         # 欠損値の補完
         df = self._fill_missing_values(df)
 
@@ -44,6 +47,9 @@ class DataPreprocessor:
 
         # 特徴量エンジニアリング
         df = self._engineer_features(df)
+        
+        # ラベルエンコードの実施
+        df = self._label_encoder(df)
 
         # スケーリング
         df = self._scale_features(df)
@@ -60,17 +66,38 @@ class DataPreprocessor:
         Returns:
             pd.DataFrame: 前処理済みのデータフレーム
         """
+        
+        # インデックスの処理
+        df = self._convert_to_datetime(df, utc=True, tz='Europe/Berlin')
+        
         # 欠損値の補完
         df = self._fill_missing_values(df)
 
         # 特徴量エンジニアリング
         df = self._engineer_features(df)
-
+        
+        # ラベルエンコードの実施
+        df = self._label_encoder(df)
+        
         # スケーリング
         df = self._scale_features(df, is_training=False)
 
         return df
-
+      
+    # 時系列データの変換
+    def _convert_to_datetime(self, df, utc=False, tz='Asia/Tokyo'):
+      try:
+        df['time'] = pd.to_datetime(df.index, utc=utc).tz_convert(tz)
+        print('データ型：',df.index.dtype)
+        print('インデックスをdatetimeに変換しました')
+        
+        return df
+      except Exception as e:
+        print(f"datetime変換に失敗しました: {e}")
+        
+        return df
+    
+    
     def _get_feature_groups(self, df: pd.DataFrame) -> Dict[str, List[str]]:
         """
         特徴量をグループ化する
@@ -175,6 +202,44 @@ class DataPreprocessor:
                 df[f'{feature}_ratio'] = df[feature] / total_load
 
         return df
+      
+    def _label_encoder(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        ラベルエンコードを行う関数
+        
+        Args:
+            df (pd.DataFrame): 入力データフレーム
+
+        Returns:
+            pd.DataFrame: ラベルエンコード変換したデータフレーム
+        """
+        df_cleaned = df.copy()
+        
+        # 数値型に変換できる列を特定
+        numeric_columns = []
+        categorical_columns = []
+        
+        for col in df_cleaned.select_dtypes(include=['object']).columns:
+            # 数値に変換できるかテスト
+            try:
+                pd.to_numeric(df_cleaned[col], errors='raise')
+                numeric_columns.append(col)
+            except:
+                categorical_columns.append(col)
+        
+        print(f'数値型に変換可能な列: {numeric_columns}')
+        print(f'カテゴリカル列: {categorical_columns}')
+        
+        # 数値型に変換
+        for col in numeric_columns:
+            df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
+        
+        # カテゴリカル列をラベルエンコード
+        for col in categorical_columns:
+            le = LabelEncoder()
+            df_cleaned[col] = le.fit_transform(df[col].values)
+        
+        return df_cleaned
 
     def _scale_features(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         """

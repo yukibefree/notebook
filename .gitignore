@@ -1,1 +1,5 @@
 .DS_Store
+.venv/
+data/
+.cursor/
+__pycache__

@@ -7,7 +7,6 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Optional
 
-
 def load_data(
     data_dir: Path,
     train_path: str = 'train.csv',
@@ -122,9 +121,13 @@ def check_missing_values(
     missing_ratio = missing / len(df)
     
     missing_info = pd.DataFrame({
+        'missing_column': missing.index,
         'missing_count': missing,
         'missing_ratio': missing_ratio
     })
+    
+    print("欠損値があるカラム、欠損値の数、全レコードに対する割合:")
+    display(missing_info)
     
     return missing_info[missing_info['missing_ratio'] > threshold]
 
