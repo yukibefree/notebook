@@ -3,3 +3,6 @@
 data/
 .cursor/
 __pycache__
+.python-version
+uv.lock
+.lock
