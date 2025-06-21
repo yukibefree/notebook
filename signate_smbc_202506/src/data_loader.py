@@ -92,7 +92,14 @@ def get_feature_groups(df: pd.DataFrame) -> dict:
             'temp', 'pressure', 'humidity', 'wind', 'rain', 'snow', 'clouds'
         ])],
         'load': [col for col in df.columns if 'load' in col],
-        'price_actual': [col for col in df.columns if 'price_actual' in col]
+        'price_actual': [col for col in df.columns if 'price_actual' in col],
+        'holiday' : [
+          'is_holiday_or_weekend_flag',
+          'is_next_day_holiday_or_weekend_flag',
+          'is_previous_day_holiday_or_weekend_flag',
+          'consecutive_holiday_or_weekend_flag'
+          ]
+
     }
     
     return feature_groups
@@ -121,13 +128,12 @@ def check_missing_values(
     missing_ratio = missing / len(df)
     
     missing_info = pd.DataFrame({
-        'missing_column': missing.index,
         'missing_count': missing,
         'missing_ratio': missing_ratio
     })
     
     print("欠損値があるカラム、欠損値の数、全レコードに対する割合:")
-    display(missing_info)
+    display(missing_info[missing_info['missing_count'] > 0])
     
     return missing_info[missing_info['missing_ratio'] > threshold]
 
@@ -177,4 +183,5 @@ def check_outliers(
                 'outlier_ratio': ((df[col] < lower_bound) | (df[col] > upper_bound)).mean()
             }
     
-    return outliers 
+    return outliers
+

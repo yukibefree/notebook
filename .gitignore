@@ -6,3 +6,5 @@ __pycache__
 .python-version
 uv.lock
 .lock
+img/
+.ipynb_checkpoints/
