@@ -8,3 +8,4 @@ uv.lock
 .lock
 img/
 .ipynb_checkpoints/
+example/
