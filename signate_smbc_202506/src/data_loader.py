@@ -135,7 +135,7 @@ def check_missing_values(
     print("欠損値があるカラム、欠損値の数、全レコードに対する割合:")
     display(missing_info[missing_info['missing_count'] > 0])
     
-    return missing_info[missing_info['missing_ratio'] > threshold]
+    return 
 
 
 def check_outliers(
