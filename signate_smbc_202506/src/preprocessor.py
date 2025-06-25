@@ -23,6 +23,19 @@ class DataPreprocessor:
         self.scalers: Dict[str, StandardScaler] = {}
         self.feature_groups: Dict[str, List[str]] = {}
         self.holiday_checker = HolidayChecker()
+        self.regions = ['barcelona', 'bilbao', 'madrid', 'seville', 'valencia']
+        self.weather_main_weights = {
+            'clear': 10,
+            'clouds': 5,
+            'rain': 4,
+            'mist': 3,
+            'fog': 2,
+            'drizzle': 1,
+            'thunderstorm': 7,
+            'snow': 6,
+            'haze': 8,
+            'other': 0
+        }
 
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -51,6 +64,9 @@ class DataPreprocessor:
         
         # 祝日情報を追加
         df = self.holiday_checker.fit(df)
+        
+        # カラムの削除
+        df = self.drop_features(df)
         
         # ラベルエンコードの実施
         df = self._label_encoder(df)
@@ -84,6 +100,9 @@ class DataPreprocessor:
         
         # 祝日情報を追加
         df = self.holiday_checker.fit(df)
+        
+        # カラムの削除
+        df = self.drop_features(df)
         
         # ラベルエンコードの実施
         df = self._label_encoder(df)
@@ -190,6 +209,26 @@ class DataPreprocessor:
 
         return df
 
+    def _create_lag_features(self, df: pd.DataFrame, target_cols: list, lags: list = [1, 24]) -> pd.DataFrame:
+        """
+        指定したカラムに対してラグ特徴量を作成する
+
+        Args:
+            df (pd.DataFrame): 入力データフレーム
+            target_cols (list): ラグを作成するカラム名リスト
+            lags (list): ラグ数のリスト（例: [1, 24]）
+
+        Returns:
+            pd.DataFrame: ラグ特徴量を追加したデータフレーム
+        """
+        lag_features = {}
+        for col in target_cols:
+            if col in df.columns:
+                for lag in lags:
+                    lag_col = f"{col}_lag{lag}"
+                    lag_features[lag_col] = df[col].shift(lag)
+        return pd.DataFrame(lag_features, index=df.index)
+
     def _engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         特徴量エンジニアリングを実行する
@@ -222,9 +261,10 @@ class DataPreprocessor:
             total_load = df[load_features].sum(axis=1)
             for feature in load_features:
                 new_features[f'{feature}_ratio'] = df[feature] / total_load
-                
-        # 特定の地域の気温差
-        new_features['valencia_temp_diff'] = df['valencia_temp_max'] - df['valencia_temp_min']
+        
+        df_temp = self._aggregate_temperature_features(df, self.regions)
+        
+        df_weather = self._aggregate_weather_main_features(df, self.regions)
         
         # 需要量と化石燃料以外による発電量の差
         # fossilを含まない発電量カラムを選択
@@ -234,9 +274,15 @@ class DataPreprocessor:
         new_features['non_fossil_generation'] = df[non_fossil_cols].sum(axis=1)
         new_features['demand_non_fossil_diff'] = df['total_load_actual'] - new_features['non_fossil_generation']
 
+        # --- ラグ特徴量の追加 ---
+        # 目的変数: price_actual のみ
+        lag_target_cols = []
+        if 'price_actual' in df.columns:
+            lag_target_cols.append('price_actual')
+        lag_features_df = self._create_lag_features(df, lag_target_cols, lags=[1, 24])
         # 新しい特徴量を一度にDataFrameに追加
         new_features_df = pd.DataFrame(new_features, index=df.index)
-        df = pd.concat([df, new_features_df], axis=1)
+        df = pd.concat([df, new_features_df, df_temp, df_weather, lag_features_df], axis=1)
 
         return df
       
@@ -323,6 +369,145 @@ class DataPreprocessor:
             print(f"{feature}: {corr_value:.3f}")
         
         return df[selected_features]
+      
+    def _aggregate_temperature_features(self, df: pd.DataFrame, regions: list) -> pd.DataFrame:
+      """
+      複数の地域における気温関連の特徴量 (temp, temp_max, temp_min) を集約し、
+      以下の4つの新しい特徴量を作成します。
+      - avg_temp: 全地域の平均気温の平均
+      - var_temp: 全地域の平均気温の分散
+      - avg_diff_temp: 全地域の最高気温と最低気温の差の平均
+      - var_diff_temp: 全地域の最高気温と最低気温の差の分散
+
+      Parameters
+      ----------
+      df : pd.DataFrame
+          元のデータフレーム。各地域の '地域名_temp', '地域名_temp_max', '地域名_temp_min' カラムを含む必要があります。
+      regions : list
+          処理する地域の名前のリスト (例: ['barcelona', 'bilbao', 'madrid', 'seville', 'valencia'])。
+
+      Returns
+      -------
+      pd.DataFrame
+          新しい4つの集約された特徴量カラムを含むデータフレーム。
+      """
+
+      # 計算用の一時的なリスト
+      all_temps = []
+      all_temp_diffs = []
+
+      for region in regions:
+          temp_col = f"{region}_temp"
+          temp_max_col = f"{region}_temp_max"
+          temp_min_col = f"{region}_temp_min"
+
+          # 必要なカラムがDataFrameに存在するか確認
+          if not all(col in df.columns for col in [temp_col, temp_max_col, temp_min_col]):
+              print(f"警告: 地域 '{region}' の必要な気温カラムの一部または全てがDataFrameに見つかりませんでした。スキップします。")
+              continue
+
+          # 各地域の平均気温 (tempカラム) を追加
+          all_temps.append(df[temp_col])
+
+          # 各地域の最高気温と最低気温の差を計算して追加
+          temp_diff = df[temp_max_col] - df[temp_min_col]
+          all_temp_diffs.append(temp_diff)
+          
+
+      if not all_temps:
+          raise ValueError("指定された地域で有効な気温カラムが見つかりませんでした。")
+
+      # 全地域の平均気温を横方向に結合し、行ごとの平均と分散を計算
+      df_all_temps = pd.concat(all_temps, axis=1)
+      
+      # NaNがある場合の処理を考慮
+      # skipna=True でNaNを無視して計算
+      avg_temp_series = df_all_temps.mean(axis=1, skipna=True)
+      var_temp_series = df_all_temps.var(axis=1, skipna=True)
+
+      # 全地域の最高気温と最低気温の差を横方向に結合し、行ごとの平均と分散を計算
+      df_all_temp_diffs = pd.concat(all_temp_diffs, axis=1)
+      
+      avg_diff_temp_series = df_all_temp_diffs.mean(axis=1, skipna=True)
+      var_diff_temp_series = df_all_temp_diffs.var(axis=1, skipna=True)
+
+      # 新しい特徴量カラムを持つDataFrameを作成
+      new_features_df = pd.DataFrame({
+          'avg_temp': avg_temp_series,
+          'var_temp': var_temp_series,
+          'avg_diff_temp': avg_diff_temp_series,
+          'var_diff_temp': var_diff_temp_series
+      }, index=df.index) # 元のDataFrameのインデックスを保持
+
+      return new_features_df
+    
+    def _aggregate_weather_main_features(self, df: pd.DataFrame, regions: list) -> pd.DataFrame:
+      """
+      複数の地域における天気に関する 'weather_main' カラムを集約し、
+      指定された重み付けに基づいて数値化し、その平均と分散を計算します。
+
+      Parameters
+      ----------
+      df : pd.DataFrame
+          元のデータフレーム。各地域の '地域名_weather_main' カラムを含む必要があります。
+      regions : list
+          処理する地域の名前のリスト (例: ['barcelona', 'bilbao', 'madrid', 'seville', 'valencia'])。
+
+      Returns
+      -------
+      pd.DataFrame
+          新しい2つの集約された特徴量カラム ('avg_weighted_weather_main', 'var_weighted_weather_main')
+          を含むデータフレーム。
+      """
+      all_weighted_weather_mains = []
+
+      for region in regions:
+          main_col = f"{region}_weather_main"
+
+          if main_col not in df.columns:
+              print(f"警告: カラム '{main_col}' がDataFrameに見つかりませんでした。スキップします。")
+              continue
+
+          # weather_main のカテゴリを重み付けに基づいて数値にマッピング
+          weighted_series = df[main_col].apply(lambda x: self.weather_main_weights.get(str(x).lower(), self.weather_main_weights['other']))
+          
+          all_weighted_weather_mains.append(weighted_series)
+          
+
+      if not all_weighted_weather_mains:
+          raise ValueError("指定された地域で有効な天気(main)カラムが見つかりませんでした。")
+
+      # 全地域の重み付けされたweather_main値を横方向に結合
+      df_all_weighted = pd.concat(all_weighted_weather_mains, axis=1)
+
+      # 行ごとの平均と分散を計算
+      # NaNが存在する可能性を考慮し、skipna=True を使用
+      avg_weighted_weather_main_series = df_all_weighted.mean(axis=1, skipna=True)
+      var_weighted_weather_main_series = df_all_weighted.var(axis=1, skipna=True)
+
+      # 新しい特徴量カラムを持つDataFrameを作成
+      new_weather_features_df = pd.DataFrame({
+          'avg_weighted_weather_main': avg_weighted_weather_main_series,
+          'var_weighted_weather_main': var_weighted_weather_main_series
+      }, index=df.index) # 元のDataFrameのインデックスを保持
+
+      return new_weather_features_df
+    
+    def drop_features(self, df):
+      drop_columns = []
+      for region in self.regions:
+        # 頭に地域がつくカラムの削除
+        drop_columns.extend(
+          [f"{region}_temp",
+          f"{region}_temp_max",
+          f"{region}_temp_min",
+          f"{region}_weather_id",
+          f"{region}_weather_main",
+          f"{region}_weather_description",
+          f"{region}_weather_icon"]
+        )
+
+      return df.drop(columns=drop_columns, errors='raise')
 
 
 import holidays
