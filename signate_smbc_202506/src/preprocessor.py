@@ -88,13 +88,16 @@ class DataPreprocessor:
         Returns:
             pd.DataFrame: 前処理済みのデータフレーム
         """
-        
+        # 目的変数がなければダミーで追加
+        if 'price_actual' not in df.columns:
+            df['price_actual'] = np.nan
+            
         # インデックスの処理
         df = self._convert_to_datetime(df, utc=True, tz='Europe/Berlin')
         
         # 欠損値の補完
         df = self._fill_missing_values(df)
-
+        
         # 特徴量エンジニアリング
         df = self._engineer_features(df)
         
@@ -102,7 +105,7 @@ class DataPreprocessor:
         df = self.holiday_checker.fit(df)
         
         # カラムの削除
-        df = self.drop_features(df)
+        df = self.drop_features(df, is_test=True)
         
         # ラベルエンコードの実施
         df = self._label_encoder(df)
@@ -262,8 +265,10 @@ class DataPreprocessor:
             for feature in load_features:
                 new_features[f'{feature}_ratio'] = df[feature] / total_load
         
+        # 地域ごとの気温をまとめる
         df_temp = self._aggregate_temperature_features(df, self.regions)
         
+        # 地域ごとの天気をまとめる
         df_weather = self._aggregate_weather_main_features(df, self.regions)
         
         # 需要量と化石燃料以外による発電量の差
@@ -493,7 +498,18 @@ class DataPreprocessor:
 
       return new_weather_features_df
     
-    def drop_features(self, df):
+    def drop_features(self, df, is_test=False):
+      """
+      特徴量を削除
+
+      Parameters
+      ----------
+      df : pd.DataFrame: 特徴量削除の対象のDataFrame
+      is_test（bool）: テストデータかどうかのフラグ
+      Returns
+      -------
+      pd.DataFrame: 特徴量削除後のDataFrame
+      """
       drop_columns = []
       for region in self.regions:
         # 頭に地域がつくカラムの削除
@@ -506,6 +522,9 @@ class DataPreprocessor:
           f"{region}_weather_description",
           f"{region}_weather_icon"]
         )
+        
+      if is_test:
+        drop_columns.append('price_actual')
 
       return df.drop(columns=drop_columns, errors='raise')
 
