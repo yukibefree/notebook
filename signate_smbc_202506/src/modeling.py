@@ -9,11 +9,23 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 from sklearn.metrics import root_mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import StandardScaler
 import optuna
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 from datetime import datetime
+
+# ニューラルネットワーク用のインポート（オプショナル）
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    from tensorflow.keras import layers
+    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    print("Warning: TensorFlow is not available. Neural network models will not work.")
 
 class TimeSeriesModel:
     """時系列予測モデルのクラス"""
@@ -23,7 +35,7 @@ class TimeSeriesModel:
         初期化
         
         Args:
-            model_type (str): モデルタイプ ('lightgbm', 'random_forest', 'svr')
+            model_type (str): モデルタイプ ('lightgbm', 'random_forest', 'svr', 'neural_network')
             **kwargs: モデル固有のパラメータ
         """
         self.model_type = model_type
@@ -31,6 +43,7 @@ class TimeSeriesModel:
         self.best_params = None
         self.selected_features = None
         self.feature_importance = None
+        self.scaler = None  # ニューラルネットワーク用のスケーラー
         
         # デフォルトパラメータ
         if model_type == 'lightgbm':
@@ -54,6 +67,17 @@ class TimeSeriesModel:
                 'kernel': 'rbf',
                 'C': 1.0,
                 'epsilon': 0.1
+            }
+        elif model_type == 'neural_network':
+            if not TENSORFLOW_AVAILABLE:
+                raise ImportError("TensorFlow is required for neural network models")
+            self.default_params = {
+                'hidden_layers': [48, 121, 8],
+                'dropout_rate': 0.16207371516723865,
+                'learning_rate': 0.005173979484789956,
+                'batch_size': 16,
+                'epochs': 100,
+                'patience': 10
             }
         
         # カスタムパラメータで更新
@@ -104,6 +128,21 @@ class TimeSeriesModel:
                     'C': trial.suggest_float('C', 0.1, 10.0, log=True),
                     'epsilon': trial.suggest_float('epsilon', 0.01, 1.0, log=True)
                 }
+            elif self.model_type == 'neural_network':
+                if not TENSORFLOW_AVAILABLE:
+                    raise ImportError("TensorFlow is required for neural network models")
+                params = {
+                    'hidden_layers': [
+                        trial.suggest_int('layer1_units', 32, 256),
+                        trial.suggest_int('layer2_units', 16, 128),
+                        trial.suggest_int('layer3_units', 8, 64)
+                    ],
+                    'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.5),
+                    'learning_rate': trial.suggest_float('learning_rate', 0.0001, 0.01, log=True),
+                    'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64]),
+                    'epochs': 50,  # 最適化時は少なめに
+                    'patience': 10
+                }
             
             rmses = []
             for train_idx, valid_idx in tscv.split(X):
@@ -125,6 +164,31 @@ class TimeSeriesModel:
                     model = SVR(**params)
                     model.fit(X_train, y_train)
                     y_pred = model.predict(X_valid)
+                elif self.model_type == 'neural_network':
+                    # データのスケーリング
+                    scaler = StandardScaler()
+                    X_train_scaled = scaler.fit_transform(X_train)
+                    X_valid_scaled = scaler.transform(X_valid)
+                    
+                    # モデルの構築
+                    model = self._build_neural_network(X_train_scaled.shape[1], params)
+                    
+                    # コールバック
+                    callbacks = [
+                        EarlyStopping(monitor='val_loss', patience=params['patience'], restore_best_weights=True),
+                        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
+                    ]
+                    
+                    # 学習
+                    model.fit(
+                        X_train_scaled, y_train,
+                        validation_data=(X_valid_scaled, y_valid),
+                        epochs=params['epochs'],
+                        batch_size=params['batch_size'],
+                        callbacks=callbacks,
+                        verbose=0
+                    )
+                    y_pred = model.predict(X_valid_scaled).flatten()
                 
                 rmse = root_mean_squared_error(y_valid, y_pred)
                 rmses.append(rmse)
@@ -142,6 +206,18 @@ class TimeSeriesModel:
                 'boosting_type': 'gbdt',
                 'verbose': -1,
                 'random_state': 42
+            })
+        elif self.model_type == 'neural_network':
+            # 個別の層パラメータからhidden_layersを再構築
+            self.best_params['hidden_layers'] = [
+                self.best_params['layer1_units'],
+                self.best_params['layer2_units'],
+                self.best_params['layer3_units']
+            ]
+            # デフォルトパラメータを追加
+            self.best_params.update({
+                'epochs': self.default_params['epochs'],
+                'patience': self.default_params['patience']
             })
         
         print(f'{self.model_type.upper()}：ベイズ最適化の結果')
@@ -197,6 +273,35 @@ class TimeSeriesModel:
             self.model.fit(X, y)
             self.selected_features = list(X.columns)
         
+        elif self.model_type == 'neural_network':
+            if not TENSORFLOW_AVAILABLE:
+                raise ImportError("TensorFlow is required for neural network models")
+            # データのスケーリング
+            self.scaler = StandardScaler()
+            X_scaled = self.scaler.fit_transform(X)
+            
+            # モデルの構築と学習
+            self.model = self._build_neural_network(X_scaled.shape[1], self.best_params)
+            
+            # コールバック
+            callbacks = [
+                EarlyStopping(monitor='loss', patience=self.best_params['patience'], restore_best_weights=True),
+                ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=1e-6)
+            ]
+            
+            # 学習
+            history = self.model.fit(
+                X_scaled, y,
+                epochs=self.best_params['epochs'],
+                batch_size=self.best_params['batch_size'],
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            self.selected_features = list(X.columns)
+            # ニューラルネットワークでは特徴量重要度は計算しない
+            self.feature_importance = None
+        
         return self.model
     
     def predict(self, X: pd.DataFrame) -> np.ndarray:
@@ -217,6 +322,12 @@ class TimeSeriesModel:
         
         if self.model_type == 'lightgbm':
             return self.model.predict(X)
+        elif self.model_type == 'neural_network':
+            if not TENSORFLOW_AVAILABLE:
+                raise ImportError("TensorFlow is required for neural network models")
+            # スケーリング
+            X_scaled = self.scaler.transform(X)
+            return self.model.predict(X_scaled).flatten()
         else:
             return self.model.predict(X)
     
@@ -266,6 +377,41 @@ class TimeSeriesModel:
         
         return np.array(predictions)
 
+    def _build_neural_network(self, input_dim: int, params: Dict) -> Any:
+        """
+        ニューラルネットワークモデルの構築
+        
+        Args:
+            input_dim (int): 入力特徴量の次元数
+            params (Dict): モデルパラメータ
+            
+        Returns:
+            Any: 構築されたモデル
+        """
+        if not TENSORFLOW_AVAILABLE:
+            raise ImportError("TensorFlow is required for neural network models")
+        
+        model = keras.Sequential()
+        
+        # 入力層（Keras 3.x推奨方法）
+        model.add(layers.Input(shape=(input_dim,)))
+        model.add(layers.Dense(params['hidden_layers'][0], activation='relu'))
+        model.add(layers.Dropout(params['dropout_rate']))
+        
+        # 隠れ層
+        for units in params['hidden_layers'][1:]:
+            model.add(layers.Dense(units, activation='relu'))
+            model.add(layers.Dropout(params['dropout_rate']))
+        
+        # 出力層
+        model.add(layers.Dense(1, activation='linear'))
+        
+        # コンパイル
+        optimizer = keras.optimizers.Adam(learning_rate=params['learning_rate'])
+        model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+        
+        return model
+
 def create_submission(predictions: np.ndarray, test_df: pd.DataFrame, 
                      output_path: str, filename: str = 'submission', target_col: str = 'price_actual') -> None:
     """
@@ -278,16 +424,22 @@ def create_submission(predictions: np.ndarray, test_df: pd.DataFrame,
         filename（str）: ファイル名
         target_col (str): 目的変数カラム名
     """
-    submission = test_df[['time']].copy()
-    submission[target_col] = predictions
-    
-    # フォーマット確認
+    # timeカラムが存在する場合と存在しない場合（アンサンブル処理など）を分岐
     if 'time' in test_df.columns:
+        # 通常のモデリング処理
+        submission = test_df[['time']].copy()
+        submission[target_col] = predictions
+        
+        # フォーマット確認
         assert submission.iloc[0, 0] == '2018-01-01 00:00:00+01:00', '1行1列目が要件を満たしません'
+    else:
+        # アンサンブル処理など、timeカラムがインデックスになっている場合
+        submission = pd.DataFrame(index=test_df.index)
+        submission[target_col] = predictions
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     submission_filename = output_path / f'{filename}_{timestamp}.csv'
-    submission.to_csv(submission_filename, index=False, header=False)
+    submission.to_csv(submission_filename, index=True, header=False)
     print(f'Submission saved: {submission_filename}')
 
 def train_and_predict(model_type: str, train_df: pd.DataFrame, test_df: pd.DataFrame,

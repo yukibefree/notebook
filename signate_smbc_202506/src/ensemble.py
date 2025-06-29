@@ -4,10 +4,13 @@ from typing import List, Optional, Tuple, Dict
 from sklearn.linear_model import LinearRegression
 import numpy as np
 from itertools import product
+from datetime import datetime
+from .modeling import create_submission
 
 def ensemble_submissions(
     submission_files: List[str],
     output_path: str,
+    filename: str = 'submission',
     target_column: Optional[str] = None,
     method: str = 'mean',
     weights: Optional[List[float]] = None
@@ -22,6 +25,8 @@ def ensemble_submissions(
         組み合わせるsubmissionファイルのパスリスト。
     output_path : str
         出力先ファイルパス。
+    filename : str
+        出力先ファイル名。
     target_column : Optional[str]
         アンサンブル対象のカラム名（Noneなら最初の数値カラムを自動判定）。
     method : str
@@ -48,17 +53,20 @@ def ensemble_submissions(
         if weights is None or len(weights) != len(preds):
             raise ValueError('weightsの長さがファイル数と一致しません')
         ensemble_pred = sum(w * p for w, p in zip(weights, preds)) / sum(weights)
+        print(f"加重割合：{str(weights).replace(', ', ' : ')}")
     else:
         raise ValueError('methodは"mean"または"weighted"のみ対応')
-    # 新しいDataFrameを作成
-    out_df = dfs[0].copy()
-    out_df[target_column] = ensemble_pred
-    out_df[[target_column]].to_csv(output_path, index=True, header=False)
+    
+    # modeling.pyのcreate_submission関数を使用
+    test_df = dfs[0].copy()
+    test_df[target_column] = ensemble_pred
+    create_submission(ensemble_pred, test_df, output_path, filename, target_column)
     print(f'Ensembled submission saved to: {output_path}')
 
 def stacking_ensemble(
     submission_files: List[str],
     output_path: str,
+    filename: str = 'submission',
     target_column: Optional[str] = None,
     meta_model=None
 ):
@@ -72,6 +80,8 @@ def stacking_ensemble(
         組み合わせるsubmissionファイルのパスリスト。
     output_path : str
         出力先ファイルパス。
+    filename : str
+        出力先ファイル名。
     target_column : Optional[str]
         アンサンブル対象のカラム名（Noneなら最初の数値カラムを自動判定）。
     meta_model : sklearnの回帰モデル（デフォルトはLinearRegression）
@@ -95,9 +105,11 @@ def stacking_ensemble(
     meta_model.fit(X, y_meta)
     # スタッキング予測
     ensemble_pred = meta_model.predict(X)
-    out_df = dfs[0].copy()
-    out_df[target_column] = ensemble_pred
-    out_df[[target_column]].to_csv(output_path, index=True, header=False)
+    
+    # modeling.pyのcreate_submission関数を使用
+    test_df = dfs[0].copy()
+    test_df[target_column] = ensemble_pred
+    create_submission(ensemble_pred, test_df, output_path, filename, target_column)
     print(f'Stacking ensemble saved to: {output_path}')
 
 def blending_ensemble(
@@ -105,6 +117,7 @@ def blending_ensemble(
     val_true_file: str,
     test_pred_files: List[str],
     output_path: str,
+    filename: str = 'submission',
     target_column: Optional[str] = None,
     meta_model=None
 ):
@@ -122,7 +135,9 @@ def blending_ensemble(
     test_pred_files : List[str]
         テストデータの各モデル予測ファイル（index_col=0, header=None）
     output_path : str
-        出力先ファイルパス
+        出力先ファイルパス。
+    filename : str
+        出力先ファイル名。
     target_column : Optional[str]
         アンサンブル対象のカラム名（Noneなら最初の数値カラムを自動判定）
     meta_model : sklearnの回帰モデル（デフォルトはLinearRegression）
@@ -153,9 +168,11 @@ def blending_ensemble(
         assert target_column in df.columns, f'{target_column}が存在しません'
     X_test = np.column_stack([df[target_column].values for df in test_dfs])
     ensemble_pred = meta_model.predict(X_test)
-    out_df = test_dfs[0].copy()
-    out_df[target_column] = ensemble_pred
-    out_df[[target_column]].to_csv(output_path, index=True, header=False)
+    
+    # modeling.pyのcreate_submission関数を使用
+    test_df = test_dfs[0].copy()
+    test_df[target_column] = ensemble_pred
+    create_submission(ensemble_pred, test_df, output_path, filename, target_column)
     print(f'Blending ensemble saved to: {output_path}')
 
 def optimize_weights_from_history(

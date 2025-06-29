@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
-from ensemble import optimize_weights_from_history, suggest_optimal_weights, analyze_weight_performance
+from .ensemble import optimize_weights_from_history, suggest_optimal_weights, analyze_weight_performance
 
 def main():
     # ユーザーのデータ
@@ -16,7 +16,9 @@ def main():
         '0.1:0.9': 8.2409318,
         '0.3:0.7': 8.0720854,
         '0.4:0.6': 8.2697982,
-        '0.25:0.75': 8.0433271
+        '0.25:0.75': 8.0433271,
+        '0.22:0.78': 8.0489563,
+        '0.237:0.763': 8.0436570,
     }
     
     print("=== 重み最適化分析 ===\n")
