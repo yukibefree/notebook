@@ -434,12 +434,12 @@ def create_submission(predictions: np.ndarray, test_df: pd.DataFrame,
         assert submission.iloc[0, 0] == '2018-01-01 00:00:00+01:00', '1行1列目が要件を満たしません'
     else:
         # アンサンブル処理など、timeカラムがインデックスになっている場合
-        submission = pd.DataFrame(index=test_df.index)
+        submission = pd.DataFrame(test_df.index)
         submission[target_col] = predictions
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     submission_filename = output_path / f'{filename}_{timestamp}.csv'
-    submission.to_csv(submission_filename, index=True, header=False)
+    submission.to_csv(submission_filename, index=False, header=False)
     print(f'Submission saved: {submission_filename}')
 
 def train_and_predict(model_type: str, train_df: pd.DataFrame, test_df: pd.DataFrame,
