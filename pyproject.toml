@@ -132,3 +132,8 @@ dependencies = [
     "widgetsnbextension==4.0.14",
     "xgboost==3.0.2",
 ]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]
